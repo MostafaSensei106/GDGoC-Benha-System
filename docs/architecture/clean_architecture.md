@@ -1,10 +1,10 @@
 # Community Hub Architecture: Scaling Engagement
 
-The GDGoC Benha System is designed as a highly decoupled, event-driven architecture that powers a modern community experience. 
+The GDGoC Benha System is designed as a highly decoupled, event-driven architecture that powers a modern community experience for thousands of students and a professional core team.
 
 ## 1. High-Level Architectural Flow
 
-The system extends the standard **Clean Architecture** with an **Event Bus** and **Background Workers** to handle complex tasks like content scheduling and media processing.
+The system extends **Clean Architecture** with a **Background Worker Layer** to handle high-latency or scheduled tasks.
 
 ```mermaid
 graph LR
@@ -24,11 +24,12 @@ graph LR
         Sched[Scheduler Worker]
         Media[Media Processor]
         Notify[Notification Service]
+        Cert[Certificate PDF Generator]
     end
 
     subgraph Data_Layer ["Persistence & Messaging"]
         DB[(PostgreSQL)]
-        Queue[Redis Streams / BullMQ]
+        Queue[Redis Streams]
         Cache[(Redis Cache)]
         S3[Object Storage / Drive]
     end
@@ -47,53 +48,42 @@ graph LR
     Sched --> Queue
     Queue --> DB
     Media --> S3
-    Notify --> Cache
+    Cert --> DB
 ```
 
-## 2. The Task Scheduling System (Go-Powered)
+## 2. Advanced Communication Logic (Redis Streams)
 
-For "Scheduled News" and "Delayed Event Starts," we use a **Worker Pool Pattern**.
+For "Scheduled Content" and "Auto-Certification," we use a **Redis-based Task Queue**.
 
-1. **Scheduling Logic**: When a Board member schedules a post for tomorrow at 10:00 AM:
-   - The API writes the post to `NEWS_FEED` with `is_published = false`.
-   - It inserts a row into `SCHEDULED_TASKS` with the `run_at` timestamp.
-2. **The Worker Loop**:
-   ```go
-   // Periodic Ticker in internal/worker/scheduler.go
-   ticker := time.NewTicker(1 * time.Minute)
-   for range ticker.C {
-       tasks := repo.GetPendingTasks(time.Now())
-       for _, t := range tasks {
-           go a.ProcessTask(t)
-       }
-   }
-   ```
-3. **Task Execution**: The worker updates the `is_published` flag in PostgreSQL and invalidates the `GET /news` cache in Redis.
+1. **Scheduling**:
+   - The API writes a task to `SCHEDULED_TASKS` (Postgres) and pushes the ID to a Redis Stream (`task:scheduler`).
+   - The **Scheduler Worker** polls at a 1-minute resolution.
+2. **Certification**:
+   - When a student's graduation bit is flipped, a `TRACK_COMPLETED` event is fired.
+   - The **Certificate Worker** picks it up, generates a unique PDF, uploads it to S3, and emails the student.
 
-## 3. Rich Session Media Integration
+## 3. High-Concurrency Security (Online/Offline Attendance)
 
-Sessions are the heart of the GDG community. We handle media and PDFs using a **Storage Adapter Pattern**.
+The system is designed to handle thousands of concurrent scans or check-ins.
 
-- **PDFs (Google Drive)**: We store the `drive_pdf_link`. The backend ensures these links follow a strict format and validates them via the Google Drive API.
-- **Gallery Images**:
-  - Images are uploaded to S3-compatible storage.
-  - The API stores the metadata in `SESSION_GALLERY`.
-  - The frontend utilizes these links to render image carousels for past events.
+- **Offline QR**: 
+  - The QR contains a signed `session_id` and `exp`.
+  - The Backend validates the signature and ensures the `session_id` exists and is `ACTIVE`.
+- **Online Code**:
+  - The `attendance_code` is stored in **Redis** with a TTL of 10 minutes.
+  - This ensures $O(1)$ lookup and automatic expiration, reducing database load during high-concurrency "Submit Code" windows.
 
-## 4. Performance Tracking (Real-Time Scoring)
+## 4. Scalability & Resilience (Edge Cases)
 
-To maintain a high-performing core team, we use an **Atomic Update Pattern**.
+| Failure Scenario | Recovery / Mitigation Strategy |
+| :--- | :--- |
+| **Postgres Downtime** | Redis maintains active session tokens. All GET requests fallback to a stale cache if available. Writes are queued in a local buffer (Internal only). |
+| **Redis Flush** | The system automatically re-populates the cache from PostgreSQL. `RoleLevel` and `AuthCodes` are reconstructed during the first request after failure. |
+| **Worker Failure** | The `SCHEDULED_TASKS` table in Postgres ensures that missed tasks can be re-run manually once the worker service is restored. |
+| **S3 / Drive Unreachable**| Media URLs are stored in Postgres. If the storage is down, the UI shows a "Media Temporarily Unavailable" placeholder instead of crashing. |
 
-- **Event-Driven Evaluation**:
-  - When attendance is logged, a `SESSION_ATTENDED` event is fired.
-  - The **Performance Worker** picks it up and increments the `CORE_TEAM_STATS.total_points`.
-  - **Redis Cache Invalidation**: The core team member's dashboard stats are wiped in Redis so the next read fetches the fresh score.
+## 5. Domain-Driven Design (DDD) Core Layers
 
-## 5. Security for Core Team Internal Data
-
-- **Domain-Specific Middlewares**:
-  ```go
-  // Restrict core team metrics to Heads and Board only
-  r.GET("/v1/core-team/metrics", a.Authorize(800), a.GetMetrics)
-  ```
-- **Soft Deletion Auditing**: Any deletion of performance data triggers a log in `AUDIT_LOGS`, recording the `OldValue` to prevent core team members from hiding poor metrics.
+- **Entities**: Pure structs (User, Bootcamp, Track).
+- **Use Cases**: `RegisterForEvent`, `LogAttendance`, `SubmitGrade`.
+- **Infrastructure**: Implementations of `UserRepo` (Postgres), `SessionCache` (Redis), `StorageService` (Google Drive API).

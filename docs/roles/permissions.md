@@ -45,44 +45,56 @@ graph TD
     CTM --> STUD
 ```
 
-## 2. Advanced Permission Matrix (The Community Hub)
+## 2. Track-Specific Leadership Roles (Examples)
 
-Permissions are checked at the **API Middleware Layer** by comparing the user's `role.level` against the `required_level`.
+The system is highly granular. Each technical department (e.g., Backend, Flutter) has its own leadership stack:
 
-| Feature | Action | Minimum HL | Responsibility |
+| Department | Head (HL 800) | Vice Head (HL 750) | Leader (HL 600) | Co-Leads (HL 500) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Backend** | Head of Tech | Vice Head (Backend) | Backend Lead | Go Co-Lead |
+| **Flutter** | Head of Tech | Vice Head (Flutter) | Flutter Lead | Dart Co-Lead |
+| **CyberSec** | Head of Tech | - | Security Lead | Network Co-Lead |
+
+## 3. Granular Permission Matrix (Staff Engineer Level)
+
+Permissions are strictly enforced at the **Middleware Layer** using the user's Hierarchy Level (HL).
+
+| Feature | Action | Minimum HL | Edge Case Handling |
 | :--- | :--- | :---: | :--- |
-| **Identity** | System-wide Audit Log View | 950 | Vice Head / OCP |
-| | Manual Role Change | 1000 | OCP only |
-| **Bootcamps** | Create/Delete Bootcamp | 950 | Board Only |
-| | Create/Edit Track | 800 | Head of Tech/Non-Tech |
-| **Sessions** | Create Session (Rich Media) | 600 | Track Lead |
-| | Add Media to Gallery | 500 | Co-Lead |
-| | Set Drive PDF Link | 600 | Track Lead |
-| **Attendance**| Bulk Attendance Record | 300 | Facilitator |
-| | View Core Team Stats | 800 | HR Head |
-| | Evaluate Core Team | 800 | Dept Head or Above |
-| **Scheduling** | Schedule News Publish | 800 | Marketing/Board |
-| | Schedule Event Start | 600 | Track Lead |
-| **Forms** | Create Global Form | 800 | Marketing Head |
-| | Export All Submissions | 900 | Vice Head / Board |
-| **News** | Global Announcement | 950 | Board |
-| | Track Internal Post | 600 | Lead |
+| **Identity** | Manual Role Change | 1000 | Only OCP can change a Head to Board. |
+| | System Audit Log View | 950 | Restricted to prevent data leaks. |
+| **Bootcamps**| Change Bootcamp Status | 800 | To move from SCREENING to ACTIVE. |
+| | Delete Track Enrollment | 800 | Requires HR Head approval (log-only). |
+| **Sessions** | Publish Attendance Code | 300 | Valid for 10-min window in Redis. |
+| | Generate Session QR | 600 | Signed JWT with short TTL. |
+| | Edit Past Attendance | 800 | Audit log records the "Reason for Edit". |
+| **Events** | Void Public Ticket | 900 | For security violations at venue. |
+| | Capacity Override | 1000 | OCP can bypass `max_seats` constraint. |
+| **Grading** | Final Grade Override | 800 | Head of Tech only (Audited). |
+| | Issue Certification | 600 | Automates PDF generation via worker. |
+| **Scheduling** | News Feed Purge | 1000 | Hard-delete of news (Rare). |
 
-## 3. Core Team vs. Students: Operational Rules
+## 4. Operational Rules for Core Team
 
-The system distinguishes between **Internal** (Core Team) and **External** (Student) data.
-
-- **Internal Sessions**: Marked with an `is_internal` flag. Only Core Team Members (HL 400+) can see these sessions. Attendance at these sessions contributes to `CORE_TEAM_STATS`.
+- **Session Access**: Core Team Members (HL 400+) can attend both Student and Internal sessions.
 - **Performance Evaluation**:
-  - **Heads** can evaluate **Leads** and **Core Team Members** in their department.
-  - **Board** can evaluate **Heads**.
-  - Evaluations are strictly private and used for internal GDGoC growth tracking.
+  - **Heads** can evaluate **Leads** and **Members**.
+  - **Board** evaluates **Heads**.
+  - Points contribute to the `CORE_TEAM_STATS` table for end-of-season awards.
 
-## 4. Track Hierarchy (Department Example)
+## 5. Middleware Logic Example (Go)
 
-### Tech Tracks (Managed by Head of Tech)
-1. **Backend Development**: Head of Backend (800) -> Lead (600) -> Co-Lead (500) -> Core Team Members (400).
-2. **Flutter Development**: Head of Flutter (800) -> Lead (600) -> Core Team Members (400).
-3. **Cyber Security**: Head of Security (800) -> Lead (600) -> Core Team Members (400).
+The `Authorize` middleware is the first line of defense. It fetches the HL from **Redis** (Key: `user:{id}:hl`) and compares it with the required level for the specific route.
 
-*Note: Large tracks can have a Vice Head of Track (HL 750) if requested by the Board.*
+```go
+func (a *App) Authorize(minLevel int) Middleware {
+    return func(c Context) error {
+        userLevel := c.Get("user_level").(int)
+        if userLevel < minLevel {
+            // Log attempt to AUDIT_LOGS as unauthorized access
+            return domain.ErrForbidden
+        }
+        return c.Next()
+    }
+}
+```

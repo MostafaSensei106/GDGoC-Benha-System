@@ -1,109 +1,99 @@
-# API Documentation: The Community Hub API (v1)
+# API Documentation: The Community Hub (v1)
 
-The GDGoC Benha System API is designed for building a rich community experience. This document provides the final production-grade reference for all features, including scheduling and media.
+The GDGoC Benha System API is built with a focus on security, performance, and developer experience. This document provides a production-grade reference for all features, including scheduling, attendance codes, and bootcamp management.
 
-## 1. Advanced Community Feed (News & Events)
-### POST `/v1/news`
-**Min Role: Lead (HL 600)**
-**Description**: Creates a news post. Supports immediate or scheduled publishing.
+## 1. Authentication & Session Management
+All authenticated requests must include the `Authorization: Bearer <JWT>` header.
+
+### POST `/v1/auth/login`
+- **Backend logic**: 
+  - Verify password hash.
+  - Store JTI (JWT ID) in **Redis** for revocation.
+  - Cache user's HL (Hierarchy Level) in Redis.
+
+---
+
+## 2. Bootcamp & Track Management
+### POST `/v1/bootcamps`
+**Min Role: Board (HL 950)**
+- **Description**: Creates a new bootcamp in `DRAFT` status.
+- **Request Body**: `{ "title": "Summer 2026", "description": "...", "status": "DRAFT" }`
+
+### PATCH `/v1/bootcamps/{id}/status`
+**Min Role: Head (HL 800)**
+- **Description**: Moves bootcamp to the next phase (e.g., `APPLICATION`, `ACTIVE`).
+
+---
+
+## 3. Dynamic Form Engine
+### POST `/v1/forms`
+**Min Role: Head (HL 800)**
+- **Description**: Creates a form with a **JSON Schema** validation block.
 - **Request Body**:
 ```json
 {
-  "title": "Flutter Workshop Tomorrow",
-  "content": "Don't forget to bring your laptops!",
-  "image_url": "https://s3.gdgoc.com/news/123.jpg",
-  "published_at": "2026-03-25T10:00:00Z",
-  "target_audience": "TRACK_ONLY",
-  "track_id": "uuid"
-}
-```
-- **Backend Behavior**: If `published_at` is in the future, the backend creates a `SCHEDULED_TASK` for the Go worker.
-
----
-
-## 2. Rich Session & Media Management
-### GET `/v1/sessions/{id}`
-**Description**: Returns full session details including media and PDF links.
-- **Response (200 OK)**:
-```json
-{
-  "id": "uuid",
-  "title": "Backend Best Practices",
-  "description": "Deep dive into Go and Postgres.",
-  "session_type": "OFFLINE",
-  "drive_pdf_link": "https://drive.google.com/...",
-  "thumbnail_url": "...",
-  "gallery": [
-    { "url": "...", "caption": "Coding session in action" },
-    { "url": "...", "caption": "Group photo" }
-  ]
-}
-```
-
-### POST `/v1/sessions/{id}/gallery`
-**Min Role: Lead (HL 600)**
-**Description**: Adds an image to the session gallery.
-- **Request Body**: `{ "image_url": "...", "caption": "..." }`
-
----
-
-## 3. Core Team & Performance Tracking
-### GET `/v1/core-team/metrics`
-**Min Role: Head (HL 800)**
-**Description**: Fetches performance rankings for the core team.
-- **Query Params**: `?track_id=uuid`, `?role=lead`
-- **Response**:
-```json
-{
-  "data": [
-    {
-      "user_id": "uuid",
-      "name": "Mostafa Sensei",
-      "points": 1250,
-      "rating": 4.8,
-      "attendance": 98
+  "title": "Backend Registration",
+  "schema": {
+    "type": "object",
+    "required": ["github_url"],
+    "properties": {
+      "github_url": { "type": "string", "pattern": "^https://github.com/.*" }
     }
-  ]
+  }
 }
 ```
+
+---
+
+## 4. Sessions & Attendance (Edge Case Support)
+### POST `/v1/sessions`
+**Min Role: Lead (HL 600)**
+- **Description**: Creates a session (Online/Offline).
+- **Online Specifics**: Generates an `attendance_code` (4-digit) stored in Redis with a TTL.
+- **Offline Specifics**: Generates a signed QR JWT.
+
+### POST `/v1/sessions/{id}/attendance`
+**Description**: Marks a student as `PRESENT`.
+- **Request Body (Online)**: `{ "user_id": "uuid", "code": "8271" }`
+- **Request Body (Offline)**: `{ "user_id": "uuid", "qr_token": "signed.jwt.token" }`
+- **Verification**: 
+  - For codes: Match against Redis key `session:{id}:code`.
+  - For QR: Decode and verify signature and expiry.
+
+---
+
+## 5. Public Events & Ticketing
+### POST `/v1/events/{id}/register`
+- **Description**: Registers a student/guest for an event.
+- **Concurrency Protection**: Uses **PostgreSQL FOR UPDATE** lock on the `max_seats` count.
+- **Success (201 Created)**: Returns a `ticket_code` (UUID) for the QR ticket.
+
+### POST `/v1/events/check-in`
+**Min Role: Facilitator (HL 300)**
+- **Description**: Scans a ticket at the venue.
+- **Request Body**: `{ "ticket_code": "uuid" }`
+- **Status Change**: Updates `EVENT_TICKETS.status` to `USED`.
+
+---
+
+## 6. Core Team Performance & Evaluation
+### GET `/v1/core-team/leaderboard`
+**Min Role: Board (HL 950)**
+- **Description**: Returns the real-time core team points rankings from **Redis ZSET**.
 
 ### POST `/v1/evaluations`
 **Min Role: Head (HL 800)**
-**Description**: Submits a performance evaluation for a core team member.
-- **Request Body**:
-```json
-{
-  "target_user_id": "uuid",
-  "score": 95,
-  "feedback": "Outstanding leadership in the Backend track."
-}
-```
+- **Description**: Submits a performance evaluation for a lead or member.
 
 ---
 
-## 4. Track Leadership (Custom Sub-Roles)
-### GET `/v1/tracks/{id}/leadership`
-**Description**: Returns the specific leadership structure of a track.
-- **Response**:
-```json
-{
-  "track_name": "Backend Development",
-  "head": { "id": "...", "name": "..." },
-  "vice_head": { "id": "...", "name": "..." },
-  "leads": [ { "id": "...", "name": "..." } ],
-  "core_team": [ { "id": "...", "name": "..." } ]
-}
-```
-
----
-
-## Standard Error Response (Global)
+## Standard Global Error Codes
 
 | Code | Status | Meaning |
 | :--- | :---: | :--- |
 | `ERR_UNAUTHORIZED` | 401 | JWT is missing, invalid, or expired. |
 | `ERR_FORBIDDEN` | 403 | User's HL (Hierarchy Level) is insufficient. |
-| `ERR_VALIDATION` | 422 | Request body failed schema validation. |
-| `ERR_NOT_FOUND` | 404 | Resource does not exist in DB. |
+| `ERR_VALIDATION` | 422 | Request body failed JSON Schema validation. |
+| `ERR_NOT_FOUND` | 404 | Resource does not exist in the database. |
 | `ERR_RATE_LIMIT` | 429 | Redis rate limit (Managed by Token Bucket). |
 | `ERR_INTERNAL` | 500 | Unexpected error on the server side. |
