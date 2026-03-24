@@ -1,81 +1,96 @@
-# Database Schema & Data Integrity: Deep Dive
+# Database Schema & Data Integrity: The Community Hub Edition
 
-The GDGoC Benha System utilizes PostgreSQL as its primary source of truth, emphasizing strict relational integrity, performance indexing, and auditability.
+The GDGoC Benha System utilizes PostgreSQL as its primary source of truth, emphasizing strict relational integrity, performance indexing, and auditability for a large-scale community.
 
-## 1. Advanced ERD (Full System)
-
-This diagram covers the intricate relationships required for a multi-departmental GDG system.
+## 1. Ultimate Entity-Relationship Diagram (ERD)
 
 ```mermaid
 erDiagram
-    %% IAM: Identity & Access
+    %% IAM: Identity & Access Management
     USERS {
-        uuid id PK "B-Tree Indexed"
-        string email UK "Case-insensitive Index"
+        uuid id PK
+        string email UK
         string password_hash
         string first_name
         string last_name
-        string university_id UK "Indexed"
+        string university_id UK
         string phone
         uuid role_id FK
-        boolean is_active "Default: true"
         datetime created_at
-        datetime updated_at
-        datetime deleted_at "Soft Delete Support"
     }
 
     ROLES {
         uuid id PK
-        string slug UK "e.g., 'ocp', 'head-tech'"
+        string slug UK "e.g., 'ocp', 'head-of-track', 'core-team-member', 'student'"
         string display_name
-        int level "10-1000 for RBAC"
+        int level "Hierarchy Level (HL)"
     }
 
-    AUDIT_LOGS {
+    %% INTERNAL: Core Team Performance
+    CORE_TEAM_STATS {
         uuid id PK
-        uuid actor_id FK "References USERS"
-        string action "e.g., 'USER_CREATED', 'GRADE_UPDATED'"
-        string target_table
-        uuid target_id
-        jsonb old_values
-        jsonb new_values
+        uuid user_id FK UK
+        int total_points
+        int tasks_completed
+        int sessions_attended
+        float performance_rating "0.0 - 5.0"
+        datetime last_evaluated_at
+    }
+
+    EVALUATIONS {
+        uuid id PK
+        uuid target_user_id FK "Member being evaluated"
+        uuid evaluator_id FK "Head/Lead giving the evaluation"
+        int score "1-100"
+        text feedback
         datetime created_at
     }
 
-    %% ORGANIZATION
+    %% ORGANIZATION: Tracks & Leadership
     BOOTCAMPS {
         uuid id PK
         string title
         text description
         date start_date
         date end_date
-        string status "Enum: UPCOMING, ACTIVE, COMPLETED"
     }
 
     TRACKS {
         uuid id PK
-        string name "e.g., 'Web Development', 'Flutter'"
+        string name "e.g., 'Backend Development', 'Flutter', 'Cyber Security'"
         uuid bootcamp_id FK
-        uuid lead_id FK "References USERS"
-        uuid co_lead_id FK "References USERS"
+        uuid head_id FK "References USERS (HL 800)"
+        uuid vice_head_id FK "References USERS (HL 750)"
+        uuid lead_id FK "References USERS (HL 600)"
     }
 
     TRACK_ENROLLMENTS {
         uuid id PK
         uuid user_id FK
         uuid track_id FK
-        string role "Enum: STUDENT, FACILITATOR"
+        string enrollment_role "Enum: STUDENT, CORE_TEAM_MEMBER, FACILITATOR"
         datetime joined_at
     }
 
-    %% OPERATIONS: Sessions & Attendance
+    %% OPERATIONS: Rich Sessions & Media
     SESSON_RECORDS {
         uuid id PK
         string title
+        text description
+        string session_type "Enum: ONLINE, OFFLINE"
         uuid track_id FK
         datetime scheduled_at
         int duration_minutes
-        string location
+        string location "Physical address or meeting link"
+        string thumbnail_url "Main session image"
+        string drive_pdf_link "Google Drive PDF link"
+    }
+
+    SESSION_GALLERY {
+        uuid id PK
+        uuid session_id FK
+        string image_url
+        string caption
     }
 
     ATTENDANCE {
@@ -84,68 +99,60 @@ erDiagram
         uuid user_id FK
         datetime check_in_time
         string status "Enum: PRESENT, ABSENT, EXCUSED"
-        int bonus_points
-        text note
+        int points_awarded
     }
 
-    %% ACADEMICS: Grading
-    GRADES {
+    %% SCHEDULING & FEED: Delayed Publishing
+    SCHEDULED_TASKS {
         uuid id PK
-        uuid user_id FK
-        uuid track_id FK
-        int score
-        text feedback
-        uuid graded_by FK "References USERS"
-        datetime graded_at
+        string task_type "Enum: NEWS_PUBLISH, EVENT_START"
+        uuid target_id "Reference to News/Event ID"
+        datetime run_at
+        string status "Enum: PENDING, COMPLETED, FAILED"
     }
 
-    %% ENGAGEMENT: Forms
-    FORMS {
+    NEWS_FEED {
         uuid id PK
         string title
-        text description
-        jsonb schema "JSON Schema for dynamic validation"
-        boolean is_public "Allow non-registered users"
-        datetime closes_at
-    }
-
-    FORM_RESPONSES {
-        uuid id PK
-        uuid form_id FK
-        uuid user_id FK "Nullable for public forms"
-        jsonb data "Answer Payload"
-        string status "Enum: PENDING, APPROVED, REJECTED"
-        datetime submitted_at
+        text content
+        string image_url
+        string target_audience "Enum: PUBLIC, CORE_TEAM_ONLY, TRACK_ONLY"
+        uuid track_id FK "Nullable"
+        uuid author_id FK
+        boolean is_published "Managed by Scheduler"
+        datetime published_at
     }
 
     %% RELATIONS
-    USERS }|--|| ROLES : "has one"
-    USERS ||--o{ AUDIT_LOGS : "performs"
+    USERS }|--|| ROLES : "has"
+    USERS ||--o| CORE_TEAM_STATS : "has performance"
+    USERS ||--o{ EVALUATIONS : "receives/gives"
     BOOTCAMPS ||--o{ TRACKS : "hosts"
-    TRACKS ||--o{ TRACK_ENROLLMENTS : "contains"
-    USERS ||--o{ TRACK_ENROLLMENTS : "enrolled in"
+    TRACKS ||--o{ TRACK_ENROLLMENTS : "has members"
     TRACKS ||--o{ SESSON_RECORDS : "schedules"
+    SESSON_RECORDS ||--o{ SESSION_GALLERY : "contains photos"
     SESSON_RECORDS ||--o{ ATTENDANCE : "tracks"
-    USERS ||--o{ ATTENDANCE : "marked for"
-    USERS ||--o{ GRADES : "receives"
-    FORMS ||--o{ FORM_RESPONSES : "collects"
+    NEWS_FEED ||--o{ SCHEDULED_TASKS : "triggers via"
 ```
 
-## 2. SQL Integrity & Performance
+## 2. Advanced Features Deep-Dive
 
-### Indexing Strategy
-- **Partial Indexes**: For frequently queried subsets (e.g., `WHERE is_active = true`).
-- **GIN Indexes**: On `JSONB` columns in the `FORMS` and `FORM_RESPONSES` tables to allow efficient querying of dynamic form fields.
-- **Foreign Key Constraints**: All relationships are strictly enforced with `ON DELETE RESTRICT` or `ON DELETE CASCADE` where appropriate (e.g., deleting a Track deletes its Enrollments).
+### A. Core Team Performance Logic
+- **`CORE_TEAM_STATS`**: Each member of the core team (including Heads and Leads) has a performance row. Points are accumulated from:
+  - **Attendance**: 10 pts per internal session.
+  - **Tasks**: Defined in the future Task Management module.
+  - **Evaluations**: Quarterly feedback from higher-HL roles (e.g., a Board member evaluates a Head).
 
-### JSONB Schema Validation
-- Form schemas will follow the **JSON Schema** standard.
-- Before insertion into `FORM_RESPONSES`, the Go backend will validate the `data` payload against the `schema` defined in the `FORMS` table.
+### B. Rich Sessions & Media Management
+- **Drive Integration**: The `drive_pdf_link` allows facilitators to attach slides or handouts directly to a session.
+- **Gallery**: A dedicated `SESSION_GALLERY` table allows multiple images per session to showcase community activity.
+- **Hybrid Support**: The `session_type` (Online/Offline) and `location` allow for both physical meetups and Google Meet/Zoom links.
 
-## 3. Data Auditing Policy
-- The `AUDIT_LOGS` table records all state-changing operations by high-HL users (Heads/Board).
-- It captures `old_values` and `new_values` for debugging and accountability, essential for a system with 10+ core team roles.
+### C. The Scheduling System
+- **`SCHEDULED_TASKS`**: This table acts as a queue for a Go background worker (using a `time.Ticker` or `Redis Streams`).
+- **Logic**: When a news item is created with a `published_at` in the future, `is_published` is set to `false`, and a task is added to this table. The worker flips the bit to `true` at the exact timestamp.
 
-## 4. Soft Deletes
-- Most tables include a `deleted_at` field. 
-- **Purpose**: Prevent accidental data loss and maintain historical records (e.g., keeping attendance records of a student who dropped a bootcamp).
+## 3. Indexing for High Performance
+- **B-Tree Index**: On `SCHEDULED_TASKS.run_at` to allow the worker to quickly poll for pending tasks.
+- **GIN Index**: On `NEWS_FEED.content` for full-text search across the community portal.
+- **Compound Index**: On `ATTENDANCE(session_id, user_id)` to ensure $O(1)$ lookup for checking if a student is already marked.

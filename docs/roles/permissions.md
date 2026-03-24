@@ -1,53 +1,51 @@
-# Organizational Hierarchy & Granular RBAC
+# Community Hub Hierarchy & Detailed RBAC
 
-The GDGoC Benha System features a multi-departmental structure with distinct authority levels. This document outlines the hierarchy and the strictly enforced **Hierarchy Level (HL)** permission matrix.
+The GDGoC Benha System features a multi-departmental structure with distinct authority levels. This document outlines the hierarchy for both **Community Members** and the **Core Team**.
 
-## 1. The Core Organization Structure
+## 1. The Community Structure
 
-Authority flows from the Board to the Heads of Departments, down to the Track Leads and Facilitators.
+Authority flows from the Board to the Heads of Departments, down to the Track Leads and Core Team Members.
 
 ```mermaid
 graph TD
-    subgraph BOARD_ROOM [Board - HL 900+]
+    subgraph BOARD_LEVEL [Board - HL 900+]
         OCP[OCP / Chapter Lead - 1000]
         VH[Vice Head - 950]
     end
 
-    subgraph DEPT_HEADS [Department Heads - HL 800]
-        HT[Head of Tech Tracks]
-        HNT[Head of Non-Tech]
-        HRH[HR Head]
-        MKH[Marketing Head]
-        DXX[DX Head]
-        LOG[Logistics Head]
-        OCVP[OCVP]
+    subgraph DEPT_LEVEL [Department Heads - HL 800]
+        HT[Head of Tech Tracks - 800]
+        HNT[Head of Non-Tech - 800]
+        HRH[HR Head - 800]
+        MKH[Marketing Head - 800]
+        DXX[DX Head - 800]
+        LOG[Logistics Head - 800]
     end
 
-    subgraph TRACK_LEADS [Track Leads - HL 600]
-        TL[Leader]
-        TCL[Co-Lead Tech]
-        NTCL[Co-Lead Non-Tech]
+    subgraph TRACK_LEVEL [Track Leadership - HL 600-750]
+        VHT[Vice Head of Track - 750]
+        TL[Track Leader - 600]
+        TCL[Co-Lead Tech/Non-Tech - 500]
     end
 
-    subgraph OPERATIONS [Operations - HL 300]
-        FAC[Facilitators]
+    subgraph CORE_TEAM_LEVEL [Core Team - HL 400]
+        CTM[Core Team Member - 400]
     end
 
-    subgraph MEMBERS [Members - HL 100]
-        STUD[Normal Student]
+    subgraph MEMBER_LEVEL [Community - HL 100]
+        STUD[Normal Student - 100]
     end
 
     %% Hierarchy
-    BOARD_ROOM --> DEPT_HEADS
-    HT --> TL
-    HT --> TCL
-    HNT --> TL
-    HNT --> NTCL
-    TL --> FAC
-    FAC --> STUD
+    BOARD_LEVEL --> DEPT_LEVEL
+    HT --> VHT
+    VHT --> TL
+    TL --> TCL
+    TCL --> CTM
+    CTM --> STUD
 ```
 
-## 2. Granular Permission Matrix
+## 2. Advanced Permission Matrix (The Community Hub)
 
 Permissions are checked at the **API Middleware Layer** by comparing the user's `role.level` against the `required_level`.
 
@@ -55,43 +53,36 @@ Permissions are checked at the **API Middleware Layer** by comparing the user's 
 | :--- | :--- | :---: | :--- |
 | **Identity** | System-wide Audit Log View | 950 | Vice Head / OCP |
 | | Manual Role Change | 1000 | OCP only |
-| | Reset Any User Password | 800 | Relevant Heads |
 | **Bootcamps** | Create/Delete Bootcamp | 950 | Board Only |
 | | Create/Edit Track | 800 | Head of Tech/Non-Tech |
-| | Assign Lead/Co-Lead | 800 | Head of Tech/Non-Tech |
+| **Sessions** | Create Session (Rich Media) | 600 | Track Lead |
+| | Add Media to Gallery | 500 | Co-Lead |
+| | Set Drive PDF Link | 600 | Track Lead |
 | **Attendance**| Bulk Attendance Record | 300 | Facilitator |
-| | Override Attendance Status| 800 | HR Head (Auditing) |
-| | Export Attendance Sheet | 600 | Lead and Above |
-| **Grading** | Input Score / Feedback | 300 | Facilitator |
-| | Approve Track Graduation | 600 | Lead |
-| | Override Final Grade | 800 | Head of Tech |
-| **Forms** | Global Form Creation | 800 | Marketing Head |
-| | Track Specific Form | 600 | Lead |
-| | Review/Accept Submission | 800 | Relevant Heads |
+| | View Core Team Stats | 800 | HR Head |
+| | Evaluate Core Team | 800 | Dept Head or Above |
+| **Scheduling** | Schedule News Publish | 800 | Marketing/Board |
+| | Schedule Event Start | 600 | Track Lead |
+| **Forms** | Create Global Form | 800 | Marketing Head |
+| | Export All Submissions | 900 | Vice Head / Board |
 | **News** | Global Announcement | 950 | Board |
 | | Track Internal Post | 600 | Lead |
-| **HR** | View Core Team Attendance | 800 | HR Head |
-| | Performance Scoring | 800 | HR Head |
 
-## 3. Implementation Policy: The Middleware Gatekeeper
+## 3. Core Team vs. Students: Operational Rules
 
-In Go, we implement a higher-order function to wrap handlers:
+The system distinguishes between **Internal** (Core Team) and **External** (Student) data.
 
-```go
-func (a *App) Authorize(minLevel int) Middleware {
-    return func(c Context) error {
-        userLevel := c.Get("user_level").(int)
-        if userLevel < minLevel {
-            return domain.ErrForbidden
-        }
-        return c.Next()
-    }
-}
+- **Internal Sessions**: Marked with an `is_internal` flag. Only Core Team Members (HL 400+) can see these sessions. Attendance at these sessions contributes to `CORE_TEAM_STATS`.
+- **Performance Evaluation**:
+  - **Heads** can evaluate **Leads** and **Core Team Members** in their department.
+  - **Board** can evaluate **Heads**.
+  - Evaluations are strictly private and used for internal GDGoC growth tracking.
 
-// Usage in Router
-r.POST("/v1/bootcamps", a.Authorize(950), a.CreateBootcamp)
-```
+## 4. Track Hierarchy (Department Example)
 
-## 4. Role-Based Cache (Redis)
-To ensure high performance, a user's `RoleLevel` is cached in Redis upon login (Key: `user:{id}:hl`). This avoids a PostgreSQL join on every authenticated request.
-- **Cache Invalidation**: Must occur immediately if a user's role is updated in the `USERS` table.
+### Tech Tracks (Managed by Head of Tech)
+1. **Backend Development**: Head of Backend (800) -> Lead (600) -> Co-Lead (500) -> Core Team Members (400).
+2. **Flutter Development**: Head of Flutter (800) -> Lead (600) -> Core Team Members (400).
+3. **Cyber Security**: Head of Security (800) -> Lead (600) -> Core Team Members (400).
+
+*Note: Large tracks can have a Vice Head of Track (HL 750) if requested by the Board.*

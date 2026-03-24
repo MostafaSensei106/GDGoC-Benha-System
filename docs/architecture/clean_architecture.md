@@ -1,76 +1,99 @@
-# System Architecture: Lean Clean Architecture in Go
+# Community Hub Architecture: Scaling Engagement
 
-The GDGoC Benha System utilizes a high-performance, strictly typed architecture designed for extreme scalability and maintainability. It follows a "Lean" version of Clean Architecture, optimized for the Go ecosystem by reducing boilerplate while maintaining strict separation between business logic and side effects (DB, Cache, Network).
+The GDGoC Benha System is designed as a highly decoupled, event-driven architecture that powers a modern community experience. 
 
-## 1. Directory Structure (Implementation Standard)
+## 1. High-Level Architectural Flow
 
-The codebase is structured to enforce the dependency rule (dependencies point inward).
-
-```text
-/
-├── cmd/                # Entry points (API server, Background Workers)
-├── internal/
-│   ├── domain/         # CORE: Business entities (structs) and Repository Interfaces
-│   ├── usecase/        # LOGIC: Pure business rules (Services)
-│   ├── delivery/       # I/O: HTTP Handlers (Fiber/Echo), Middleware
-│   └── infrastructure/ # IMPL: sqlc generated code, Redis client, Third-party SDKs
-├── migrations/         # goose SQL migration files
-├── pkg/                # UTILS: Shared utilities (Logger, Validator)
-└── sql/                # RAW SQL: Used by sqlc to generate type-safe code
-```
-
-## 2. The Dependency Flow (Sequence of Implementation)
-
-1. **Domain Layer**: Define the `User` struct and `UserRepository` interface.
-2. **Infrastructure Layer**: Write the `sqlc` query. Implement the `UserRepository` using the generated code.
-3. **Usecase Layer**: Inject the `UserRepository` interface into the `UserUsecase` service.
-4. **Delivery Layer**: Call the `UserUsecase` from an HTTP handler.
-
-## 3. Tech Stack Deep-Dive
-
-### A. PostgreSQL & sqlc (Persistence)
-We use `sqlc` to eliminate the "Magic String" problem of raw SQL and the performance overhead of ORMs.
-- **Workflow**: Write raw SQL in `sql/queries/*.sql` -> Run `sqlc generate` -> Get type-safe Go methods.
-- **Benefits**: Zero reflection, compile-time SQL validation, maximum performance.
-
-### B. Redis (The Accelerator)
-Redis is not just a cache; it's a critical infrastructure component for state management.
-- **State Storage**: Storing active JWT JTI (JWT ID) for immediate session revocation.
-- **Authorization Cache**: Storing a user's `RoleID` and `Level` to avoid DB joins on every authorized request.
-- **Distributed Locking**: Preventing race conditions during high-concurrency event registrations.
-
-### C. goose (Schema Evolution)
-- All schema changes are versioned SQL files. 
-- **Rule**: Never use `sqlc` to modify schema; use `goose` to ensure consistency across environments.
-
-## 4. Cross-Cutting Concerns
-
-### Error Handling Strategy
-We use custom error types in the `domain` layer (e.g., `domain.ErrUserNotFound`) and map them to HTTP status codes in the `delivery` layer.
-
-### Observability (Logging & Tracing)
-- **Structured Logging**: Using `zap` or `slog` for JSON logs.
-- **Trace IDs**: Injected into every request context via middleware and propagated through the Use Case and Repository layers for deep debugging.
-
-## 5. System Scalability Diagram
+The system extends the standard **Clean Architecture** with an **Event Bus** and **Background Workers** to handle complex tasks like content scheduling and media processing.
 
 ```mermaid
-graph TD
-    LB[Load Balancer] --> WebCluster[Go API Cluster (Delivery Layer)]
-    
-    subgraph AppServer [API Server Node]
-        WebCluster --> Usecase[Usecase Layer (Business Logic)]
-        Usecase --> RepoIntf[Repository Interfaces]
-        RepoIntf --> PostgresImpl[sqlc / Postgres Impl]
-        RepoIntf --> RedisImpl[Redis Client Impl]
+graph LR
+    subgraph Frontend ["Client Layer"]
+        Web[Web Dashboard]
+        App[Mobile App]
     end
 
-    PostgresImpl --> RDS[(Primary PostgreSQL)]
-    RDS -. "Replication" .-> RDSR[(Read Replica)]
-    RedisImpl --> RedisCluster[(Redis Cluster - Sessions & Cache)]
-
-    subgraph Workers [Background Workers]
-        Worker[Go Background Consumer] --> RDS
-        Worker --> RedisCluster
+    subgraph API_Cluster ["API Cluster (Delivery)"]
+        Gate[API Gateway]
+        Auth[Auth Service]
+        TrackSvc[Track Service]
+        SessSvc[Session Service]
     end
+
+    subgraph Background_Layer ["Worker Layer"]
+        Sched[Scheduler Worker]
+        Media[Media Processor]
+        Notify[Notification Service]
+    end
+
+    subgraph Data_Layer ["Persistence & Messaging"]
+        DB[(PostgreSQL)]
+        Queue[Redis Streams / BullMQ]
+        Cache[(Redis Cache)]
+        S3[Object Storage / Drive]
+    end
+
+    %% Interactions
+    Web --> Gate
+    App --> Gate
+    Gate --> Auth
+    Gate --> TrackSvc
+    Gate --> SessSvc
+
+    TrackSvc --> DB
+    SessSvc --> DB
+    SessSvc --> S3
+
+    Sched --> Queue
+    Queue --> DB
+    Media --> S3
+    Notify --> Cache
 ```
+
+## 2. The Task Scheduling System (Go-Powered)
+
+For "Scheduled News" and "Delayed Event Starts," we use a **Worker Pool Pattern**.
+
+1. **Scheduling Logic**: When a Board member schedules a post for tomorrow at 10:00 AM:
+   - The API writes the post to `NEWS_FEED` with `is_published = false`.
+   - It inserts a row into `SCHEDULED_TASKS` with the `run_at` timestamp.
+2. **The Worker Loop**:
+   ```go
+   // Periodic Ticker in internal/worker/scheduler.go
+   ticker := time.NewTicker(1 * time.Minute)
+   for range ticker.C {
+       tasks := repo.GetPendingTasks(time.Now())
+       for _, t := range tasks {
+           go a.ProcessTask(t)
+       }
+   }
+   ```
+3. **Task Execution**: The worker updates the `is_published` flag in PostgreSQL and invalidates the `GET /news` cache in Redis.
+
+## 3. Rich Session Media Integration
+
+Sessions are the heart of the GDG community. We handle media and PDFs using a **Storage Adapter Pattern**.
+
+- **PDFs (Google Drive)**: We store the `drive_pdf_link`. The backend ensures these links follow a strict format and validates them via the Google Drive API.
+- **Gallery Images**:
+  - Images are uploaded to S3-compatible storage.
+  - The API stores the metadata in `SESSION_GALLERY`.
+  - The frontend utilizes these links to render image carousels for past events.
+
+## 4. Performance Tracking (Real-Time Scoring)
+
+To maintain a high-performing core team, we use an **Atomic Update Pattern**.
+
+- **Event-Driven Evaluation**:
+  - When attendance is logged, a `SESSION_ATTENDED` event is fired.
+  - The **Performance Worker** picks it up and increments the `CORE_TEAM_STATS.total_points`.
+  - **Redis Cache Invalidation**: The core team member's dashboard stats are wiped in Redis so the next read fetches the fresh score.
+
+## 5. Security for Core Team Internal Data
+
+- **Domain-Specific Middlewares**:
+  ```go
+  // Restrict core team metrics to Heads and Board only
+  r.GET("/v1/core-team/metrics", a.Authorize(800), a.GetMetrics)
+  ```
+- **Soft Deletion Auditing**: Any deletion of performance data triggers a log in `AUDIT_LOGS`, recording the `OldValue` to prevent core team members from hiding poor metrics.

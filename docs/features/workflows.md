@@ -1,109 +1,78 @@
-# System Workflows & Complex Logic
+# Community Hub Features & Complex Logic
 
-This document details the complex logic within the GDGoC Benha System using sequence diagrams.
+The GDGoC Benha System is more than a registration tool; it's a platform for community growth and professional management.
 
-## 1. Automated Attendance & Performance Scoring
+## 1. Automated Scheduling Engine
 
-When a Facilitator logs attendance for a student, the system automatically calculates the student's performance score based on the status (Present/Absent/Excused) and any bonus points.
+Managing announcements for a community requires precision. Our system uses a **Deferred Publishing Engine**.
 
 ```mermaid
 sequenceDiagram
-    participant Fac as Facilitator App
+    participant Board as Board (HL 900+)
     participant API as Backend (Go)
-    participant DB as Postgres (sqlc)
-    participant Cache as Redis (User Stats)
+    participant DB as Postgres (SCHEDULED_TASKS)
+    participant Worker as Background Scheduler
+    participant Notify as Notification Service
 
-    Fac->>API: POST /sessions/{id}/attendance {userID, status, bonus}
-    API->>DB: Verify Facilitator has permission (HL 300+)
-    API->>DB: Record attendance entry
-    
-    Note over API: Business Logic Calculation
-    alt status == PRESENT
-        API->>API: Base Points = 10 + bonus
-    else status == ABSENT
-        API->>API: Base Points = 0
-    else status == EXCUSED
-        API->>API: Base Points = 5
+    Board->>API: POST /v1/news { "published_at": "tomorrow 10am" }
+    API->>DB: INSERT INTO news_feed (is_published: false)
+    API->>DB: INSERT INTO scheduled_tasks (run_at: "tomorrow 10am")
+    API-->>Board: 202 Accepted (Scheduled)
+
+    Note over Worker: Worker polls every 60s
+    Worker->>DB: SELECT * FROM scheduled_tasks WHERE run_at <= NOW()
+    Worker->>DB: UPDATE news_feed SET is_published: true
+    Worker->>Notify: Send Broadcast to Core Team/Students
+    Worker->>DB: UPDATE scheduled_tasks SET status: 'COMPLETED'
+```
+
+## 2. Core Team Performance & Track Leadership
+
+To maintain excellence, we track the performance of every core team member across all departments (Tech, HR, PR, etc.).
+
+### Track Hierarchy Logic
+Each track (e.g., Backend, Flutter, Android) has a dedicated leadership stack:
+- **Head of Department (HL 800)**: Oversees all technical tracks.
+- **Vice Head (HL 750)**: Second-in-command for large departments.
+- **Track Lead (HL 600)**: Direct owner of a specific track's curriculum and team.
+- **Core Team Members (HL 500)**: Active organizers and assistants who attend internal sessions.
+
+### Scoring Metrics
+| Activity | Points | Rule |
+| :--- | :---: | :--- |
+| **Session Attendance** | +10 | Logged via `SESSION_RECORDS` |
+| **Task Completion** | +50 | Verified by Lead |
+| **Leadership Evaluation**| +100 | Quarterly review by Head |
+| **Session Absence** | -20 | Unexcused absence from internal meetings |
+
+## 3. Rich Community Sessions
+
+Sessions include high-quality media and academic resources to provide maximum value to Google Students.
+
+```mermaid
+graph LR
+    subgraph Metadata [Session Info]
+        Title[Title]
+        Desc[Description]
+        Type[Online/Offline]
     end
-    
-    API->>DB: Update track-specific student performance score
-    API->>Cache: Invalidate student's performance stats cache
-    API-->>Fac: 200 OK (Attendance Recorded)
-```
 
-## 2. Dynamic Form Life Cycle
-
-This workflow describes how a Board/Head creates a registration form with a dynamic schema and how the system handles submissions.
-
-```mermaid
-sequenceDiagram
-    participant Head as Department Head
-    participant API as Backend (Go)
-    participant DB as Postgres (JSONB)
-    participant Student as Student User
-
-    Head->>API: POST /forms {title, description, schema_json}
-    Note right of Head: Schema defines fields like "GitHub URL (Required)"
-    API->>DB: Store in FORMS table as JSONB
-    API-->>Head: 201 Created
-
-    Student->>API: GET /forms/{id}
-    API->>DB: Retrieve Form Schema
-    API-->>Student: Return JSON Schema for frontend to render
-
-    Student->>API: POST /forms/{id}/submit {data_json}
-    API->>API: Validate data_json against the stored schema
-    
-    alt Validation Failed
-        API-->>Student: 400 Bad Request (Validation Errors)
-    else Validation Success
-        API->>DB: Insert response into FORM_RESPONSES (JSONB)
-        API-->>Student: 200 OK (Submission Received)
+    subgraph Media [Media Cluster]
+        Thumbnail[Thumbnail Image]
+        Gallery[Session Gallery]
+        PDF[Google Drive Handouts]
     end
+
+    Metadata --> SessionObject
+    Media --> SessionObject
 ```
 
-## 3. Global News & Announcement Broadcast
+- **Offline Sessions**: Location includes a physical address (e.g., "Main Hall, Engineering Faculty").
+- **Online Sessions**: Location is a dynamic link (Google Meet).
+- **Drive Integration**: All PDFs are linked directly from the official GDG Google Drive for centralized document management.
 
-The Board (OCP/Vice) can broadcast announcements to all users, while Track Leads can target specific track members.
+## 4. Community News Feed (The Pulse)
 
-```mermaid
-sequenceDiagram
-    participant Board as Board Member
-    participant API as Backend (Go)
-    participant DB as Postgres
-    participant Redis as Redis (Pub/Sub)
-    participant Clients as All User Devices
-
-    Board->>API: POST /news {title, content, target: "PUBLIC"}
-    API->>DB: Persist news entry
-    API->>Redis: Publish "new_announcement" event
-    
-    Note over Redis: All connected websocket clients receive push
-    Redis-->>Clients: Real-time notification "GDGoC Benha just posted news!"
-    API-->>Board: 204 No Content (Broadcast Sent)
-```
-
-## 4. Academic Evaluation & Grading Flow
-
-Tracking grades for student assignments and projects across different tracks.
-
-```mermaid
-sequenceDiagram
-    participant Fac as Facilitator
-    participant Lead as Track Lead
-    participant API as Backend
-    participant DB as Postgres
-
-    Fac->>API: POST /grades {userID, trackID, score, feedback}
-    API->>DB: Store Grade as "PENDING"
-    API-->>Fac: 200 OK (Grade Submitted for Review)
-
-    Lead->>API: GET /grades/pending (Filter by track)
-    API->>DB: List all pending grades in Lead's track
-    API-->>Lead: List of evaluations
-
-    Lead->>API: PATCH /grades/{id} {status: "APPROVED"}
-    API->>DB: Update grade status to "APPROVED"
-    API->>DB: Recalculate student's track average
-    API-->>Lead: 200 OK
-```
+The news feed is the central nervous system of the GDG.
+- **Targeting**: Posts can be restricted to specific tracks (e.g., "Backend-only announcement") or roles (e.g., "Internal message for Leads").
+- **Real-time Delivery**: When a post goes live (immediately or via scheduler), an event is triggered to notify users via Webhook or Firebase Cloud Messaging (FCM).
